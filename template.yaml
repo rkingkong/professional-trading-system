@@ -1,0 +1,51 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: 'Trading System - Deploy Lambda and DynamoDB'
+
+Resources:
+  # DynamoDB Table for Trading Signals
+  TradingSignalsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: trading-system-signals
+      AttributeDefinitions:
+        - AttributeName: symbol
+          AttributeType: S
+        - AttributeName: timestamp
+          AttributeType: S
+      KeySchema:
+        - AttributeName: symbol
+          KeyType: HASH
+        - AttributeName: timestamp
+          KeyType: RANGE
+      BillingMode: PAY_PER_REQUEST
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: true
+
+  # Lambda Function
+  TradingSystemEngine:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: trading-system-engine
+      CodeUri: ./
+      Handler: real_lambda_function.lambda_handler
+      Runtime: python3.9
+      Timeout: 300
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref TradingSignalsTable
+      Environment:
+        Variables:
+          SIGNALS_TABLE: !Ref TradingSignalsTable
+      Events:
+        ScheduledScan:
+          Type: Schedule
+          Properties:
+            Schedule: rate(30 minutes)
+
+Outputs:
+  DynamoDBTable:
+    Value: !Ref TradingSignalsTable
+  LambdaFunction:
+    Value: !Ref TradingSystemEngine
