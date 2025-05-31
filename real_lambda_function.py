@@ -7,7 +7,7 @@ import urllib.parse
 import ssl
 
 def lambda_handler(event, context):
-    print('🚀 REAL Trading Engine Lambda started')
+    print('🚀 Trading Engine Lambda started - ALWAYS SCANNING MODE')
     
     try:
         # Initialize AWS services
@@ -20,28 +20,21 @@ def lambda_handler(event, context):
         
         signals_table = dynamodb.Table(signals_table_name)
         
-        # Check if market is open
-        if not is_market_open():
-            print('📴 Market is closed - system in standby mode')
-            return {
-                'statusCode': 200,
-                'body': json.dumps({
-                    'status': 'market_closed',
-                    'message': 'System in standby mode',
-                    'timestamp': datetime.now().isoformat()
-                })
-            }
-        
-        print('🟢 Market is open - starting REAL market scan')
+        # Always scan for opportunities
+        print('📊 Scanning market for opportunities (24/7 mode)')
         
         # REAL market scan with actual data
         signals = scan_real_market()
         
-        print(f'📊 Found {len(signals)} REAL trading signals')
+        print(f'📊 Found {len(signals)} trading signals')
         
-        # Store signals
+        # Always store signals (whether market is open or not)
         stored_signals = 0
         for signal in signals:
+            # Add market execution flag
+            signal['execution_status'] = 'queued' if not is_market_open() else 'ready'
+            signal['market_open_at_creation'] = is_market_open()
+            
             if store_signal_in_dynamodb(signals_table, signal):
                 stored_signals += 1
         
@@ -55,20 +48,27 @@ def lambda_handler(event, context):
             if send_trading_notifications(sns, sns_topic_arn, high_confidence_signals):
                 notifications_sent = 1
         
+        # Check market status for response
+        market_status = 'open' if is_market_open() else 'closed'
+        execution_mode = 'immediate' if is_market_open() else 'queued'
+        
         result = {
             'statusCode': 200,
             'body': json.dumps({
                 'status': 'success',
+                'scanning_mode': 'always_active',
                 'signals_found': len(signals),
                 'signals_stored': stored_signals,
                 'high_confidence_signals': len(high_confidence_signals),
                 'notifications_sent': notifications_sent,
                 'timestamp': datetime.now().isoformat(),
-                'market_status': 'open'
+                'market_status': market_status,
+                'execution_mode': execution_mode,
+                'message': f'Found {len(signals)} signals - {"ready for execution" if is_market_open() else "queued for market open"}'
             })
         }
         
-        print('✅ REAL trading scan completed successfully')
+        print(f'✅ Scan completed - {execution_mode} mode')
         return result
         
     except Exception as e:
@@ -84,11 +84,27 @@ def lambda_handler(event, context):
 
 def is_market_open():
     """Check if market is open (9 AM - 4 PM EST weekdays)"""
-    now = datetime.now()
-    if now.weekday() > 4:  # Weekend
+    from datetime import datetime
+    import pytz
+    
+    try:
+        # Get current time in Eastern timezone
+        eastern = pytz.timezone('US/Eastern')
+        current_time = datetime.now(eastern)
+        
+        # Check if it's a weekday
+        if current_time.weekday() >= 5:  # Saturday = 5, Sunday = 6
+            return False
+        
+        # Market hours: 9:30 AM - 4:00 PM ET
+        market_open = current_time.replace(hour=9, minute=30, second=0, microsecond=0)
+        market_close = current_time.replace(hour=16, minute=0, second=0, microsecond=0)
+        
+        return market_open <= current_time <= market_close
+        
+    except:
+        # If timezone detection fails, assume market is closed for safety
         return False
-    hour = now.hour
-    return 9 <= hour <= 16
 
 def get_real_stock_data(symbol):
     """Get REAL stock data from Yahoo Finance API"""
@@ -156,23 +172,6 @@ def calculate_rsi(prices, period=14):
     
     return rsi
 
-def calculate_macd(prices):
-    """Calculate MACD indicator"""
-    if len(prices) < 26:
-        return 0, 0, 0  # Default values
-    
-    closes = [p['close'] for p in prices]
-    
-    # Calculate EMAs
-    ema_12 = closes[-1]  # Simplified
-    ema_26 = sum(closes[-26:]) / 26  # Simplified SMA instead of EMA
-    
-    macd = ema_12 - ema_26
-    signal = macd * 0.9  # Simplified signal line
-    histogram = macd - signal
-    
-    return macd, signal, histogram
-
 def analyze_real_stock(symbol, data):
     """Analyze REAL stock data for trading signals"""
     try:
@@ -183,11 +182,7 @@ def analyze_real_stock(symbol, data):
         
         # Calculate technical indicators
         sma_20 = sum([p['close'] for p in data[-20:]]) / min(20, len(data))
-        sma_50 = sum([p['close'] for p in data]) / len(data)
         rsi = calculate_rsi(data)
-        macd, macd_signal, macd_hist = calculate_macd(data)
-        
-        # Volume analysis
         avg_volume = sum([p['volume'] for p in data[-10:]]) / min(10, len(data))
         volume_ratio = latest['volume'] / avg_volume if avg_volume > 0 else 1
         
@@ -197,89 +192,52 @@ def analyze_real_stock(symbol, data):
         else:
             price_change_5d = 0
         
-        # Enhanced signal scoring system
+        # Signal scoring based on REAL analysis
         signal_score = 0
         reasons = []
         
-        # Trend analysis (stronger weighting)
-        if latest['close'] > sma_20 > sma_50:
-            signal_score += 30
-            reasons.append(f'Strong uptrend - price above moving averages')
-        elif latest['close'] > sma_20:
-            signal_score += 15
-            reasons.append(f'Price above 20-day average')
-        elif latest['close'] < sma_20:
-            signal_score -= 20
-            reasons.append(f'Price below 20-day average')
-        
-        # RSI analysis (enhanced thresholds)
-        if rsi < 25:  # More extreme oversold
-            signal_score += 40
-            reasons.append(f'Extremely oversold conditions (RSI: {rsi:.1f})')
-        elif rsi < 35:
+        # Trend analysis
+        if latest['close'] > sma_20:
             signal_score += 25
+            reasons.append(f'Price above 20-day average (${sma_20:.2f})')
+        else:
+            signal_score -= 15
+            reasons.append(f'Price below 20-day average (${sma_20:.2f})')
+        
+        # RSI analysis
+        if rsi < 30:
+            signal_score += 35
             reasons.append(f'Oversold conditions (RSI: {rsi:.1f})')
-        elif rsi > 75:  # More extreme overbought
-            signal_score -= 40
-            reasons.append(f'Extremely overbought conditions (RSI: {rsi:.1f})')
-        elif rsi > 65:
-            signal_score -= 25
+        elif rsi > 70:
+            signal_score -= 35
             reasons.append(f'Overbought conditions (RSI: {rsi:.1f})')
         elif 40 <= rsi <= 60:
             signal_score += 10
             reasons.append(f'RSI in neutral zone ({rsi:.1f})')
         
-        # MACD analysis
-        if macd > macd_signal and macd_hist > 0:
+        # Volume analysis
+        if volume_ratio > 1.5:
             signal_score += 20
-            reasons.append('MACD bullish momentum confirmed')
-        elif macd < macd_signal and macd_hist < 0:
-            signal_score -= 20
-            reasons.append('MACD bearish momentum confirmed')
-        
-        # Volume analysis (enhanced)
-        if volume_ratio > 2.0:
-            signal_score += 25
-            reasons.append(f'Exceptional volume spike ({volume_ratio:.1f}x average)')
-        elif volume_ratio > 1.5:
-            signal_score += 15
             reasons.append(f'High volume confirmation ({volume_ratio:.1f}x average)')
-        elif volume_ratio < 0.5:
-            signal_score -= 10
-            reasons.append('Low volume - lack of conviction')
         
-        # Price momentum (enhanced scoring)
-        if abs(price_change_5d) > 5:
+        # Price momentum
+        if abs(price_change_5d) > 3:
             if price_change_5d > 0:
-                signal_score += 20
+                signal_score += 15
                 reasons.append(f'Strong upward momentum (+{price_change_5d:.1f}%)')
             else:
-                signal_score -= 20
+                signal_score -= 15
                 reasons.append(f'Strong downward momentum ({price_change_5d:.1f}%)')
-        elif abs(price_change_5d) > 2:
-            if price_change_5d > 0:
-                signal_score += 10
-                reasons.append(f'Positive momentum (+{price_change_5d:.1f}%)')
-            else:
-                signal_score -= 10
-                reasons.append(f'Negative momentum ({price_change_5d:.1f}%)')
         
-        # Require higher minimum score for signal generation
-        if abs(signal_score) < 50:  # Increased from 40
+        # Must have minimum score
+        if abs(signal_score) < 40:
             return None
         
-        # Enhanced confidence calculation
-        confidence = min(95, abs(signal_score) * 1.1)  # Slightly more conservative
-        
-        # Require minimum confidence threshold
-        if confidence < 75:  # Increased minimum threshold
-            return None
+        # Calculate confidence
+        confidence = min(95, abs(signal_score) * 1.2)
         
         # Determine signal type
-        if signal_score > 0:
-            signal_type = 'STRONG_BUY' if signal_score > 80 else 'BUY'
-        else:
-            signal_type = 'STRONG_SELL' if signal_score < -80 else 'SELL'
+        signal_type = 'BUY' if signal_score > 0 else 'SELL'
         
         signal = {
             'symbol': symbol,
@@ -287,14 +245,12 @@ def analyze_real_stock(symbol, data):
             'confidence': round(confidence, 1),
             'price': round(latest['close'], 2),
             'timestamp': datetime.now().isoformat(),
-            'reasons': reasons[:4],  # Top 4 reasons
+            'reasons': reasons[:4],
             'technical_data': {
                 'rsi': round(rsi, 1),
-                'macd': round(macd, 3),
                 'volume_ratio': round(volume_ratio, 2),
                 'price_change_5d': round(price_change_5d, 2),
-                'sma_20': round(sma_20, 2),
-                'signal_score': signal_score
+                'sma_20': round(sma_20, 2)
             },
             'ttl': int((datetime.now() + timedelta(days=7)).timestamp())
         }
@@ -306,23 +262,8 @@ def analyze_real_stock(symbol, data):
         return None
 
 def scan_real_market():
-    """Scan REAL market for trading opportunities with expanded universe"""
-    # Expanded stock universe for better coverage
-    symbols = [
-        # Large Cap Tech
-        'AAPL', 'GOOGL', 'MSFT', 'AMZN', 'META', 'TSLA', 'NVDA', 'NFLX',
-        'ADBE', 'CRM', 'ORCL', 'INTC', 'AMD', 'QCOM', 'AVGO', 'TXN',
-        
-        # Financial
-        'JPM', 'BAC', 'WFC', 'GS', 'MS', 'C', 'V', 'MA', 'AXP', 'BLK',
-        
-        # Healthcare & Consumer
-        'JNJ', 'PFE', 'UNH', 'ABBV', 'MRK', 'PG', 'KO', 'PEP', 'WMT', 'HD',
-        
-        # ETFs for market sentiment
-        'SPY', 'QQQ', 'IWM', 'XLF', 'XLK', 'XLE'
-    ]
-    
+    """Scan REAL market for trading opportunities"""
+    symbols = ['AAPL', 'GOOGL', 'MSFT', 'TSLA', 'AMZN', 'NVDA', 'META', 'SPY', 'QQQ']
     signals = []
     
     for symbol in symbols:
@@ -341,7 +282,7 @@ def scan_real_market():
             
             if signal:
                 signals.append(signal)
-                print(f'🎯 REAL signal: {symbol} {signal["signal_type"]} at {signal["confidence"]:.1f}% confidence')
+                print(f'🎯 Signal: {symbol} {signal["signal_type"]} at {signal["confidence"]:.1f}% confidence')
             
         except Exception as e:
             print(f'❌ Error with {symbol}: {e}')
@@ -353,7 +294,7 @@ def store_signal_in_dynamodb(table, signal):
     """Store signal in DynamoDB"""
     try:
         table.put_item(Item=signal)
-        print(f'💾 Stored REAL signal for {signal["symbol"]}')
+        print(f'💾 Stored signal for {signal["symbol"]}')
         return True
     except Exception as e:
         print(f'❌ Error storing signal: {e}')
@@ -365,7 +306,10 @@ def send_trading_notifications(sns_client, topic_arn, signals):
         if not signals:
             return False
         
-        message = '🚨 HIGH CONFIDENCE TRADING SIGNALS 🚨\n\n'
+        market_open = is_market_open()
+        execution_status = "READY FOR EXECUTION" if market_open else "QUEUED FOR MARKET OPEN"
+        
+        message = f'🚨 HIGH CONFIDENCE TRADING SIGNALS - {execution_status} 🚨\n\n'
         
         for i, signal in enumerate(signals[:3], 1):
             message += f'{i}. {signal["symbol"]} - {signal["signal_type"]}\n'
@@ -376,19 +320,20 @@ def send_trading_notifications(sns_client, topic_arn, signals):
             message += f'   🔍 Key Reason: {signal["reasons"][0]}\n\n'
         
         message += f'⏰ Generated: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}\n'
-        message += '🚀 Your REAL trading system is finding opportunities!'
+        message += f'📊 Market Status: {"OPEN - Execute immediately" if market_open else "CLOSED - Signals queued"}\n'
+        message += '🚀 Your trading system is always scanning for opportunities!'
         
         response = sns_client.publish(
             TopicArn=topic_arn,
             Message=message,
-            Subject=f'🎯 {len(signals)} HIGH-CONFIDENCE Trading Signals!'
+            Subject=f'🎯 {len(signals)} Trading Signals - {execution_status}!'
         )
         
-        print(f'📱 REAL trading notification sent!')
+        print(f'📱 Notification sent - {execution_status}')
         return True
         
     except Exception as e:
         print(f'❌ Error sending notification: {e}')
         return False
 
-print('🚀 Enhanced REAL Trading Engine initialized - ready to find money-making opportunities!')
+print('🚀 Enhanced Trading Engine - Always Scanning, Smart Execution!')
