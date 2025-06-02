@@ -18,76 +18,206 @@ def convert_floats_to_decimal(obj):
         return Decimal(str(obj))
     else:
         return obj
+
+# NEW: Initialize Alpaca paper trading
+def init_alpaca_paper_trading():
+    """Initialize Alpaca API for paper trading"""
+    try:
+        import alpaca_trade_api as tradeapi
+        
+        api_key = os.environ.get('PKTGTBUDLQ3V9XFHTBHA')
+        secret_key = os.environ.get('PSOdtqJ5PQAk7Up76ZPSHd1km5NDC9f74YHX6bvK')
+        
+        if not api_key or not secret_key:
+            print('📊 No Alpaca credentials - continuing with signals only (existing functionality)')
+            return None
+        
+        # Always use paper trading for safety
+        base_url = 'https://paper-api.alpaca.markets'
+        
+        api = tradeapi.REST(api_key, secret_key, base_url=base_url)
+        
+        # Test connection
+        account = api.get_account()
+        print(f'✅ Alpaca paper trading connected - Portfolio: ${float(account.portfolio_value):,.2f}')
+        return api
+        
+    except ImportError:
+        print('📦 alpaca-trade-api not installed - continuing with signals only')
+        return None
+    except Exception as e:
+        print(f'⚠️ Alpaca connection failed: {e} - continuing with signals only')
+        return None
+
+# NEW: Execute paper trades for high-confidence signals
+def execute_paper_trades(trading_api, signals):
+    """Execute paper trades for high-confidence signals"""
+    if not trading_api:
+        print('📊 No trading API - storing signals only (existing behavior)')
+        return []
     
-def lambda_handler(event, context):
-    print('🚀 Enhanced Trading Engine Lambda started - ML-POWERED + SENTIMENT MODE')
+    executed_trades = []
+    
+    # Only trade BUY signals with 80%+ confidence
+    high_confidence_buy_signals = [
+        s for s in signals 
+        if s.get('confidence', 0) >= 80 and s.get('signal_type') in ['BUY', 'STRONG_BUY']
+    ]
+    
+    for signal in high_confidence_buy_signals[:3]:  # Limit to 3 trades per run
+        try:
+            # Get portfolio info for position sizing
+            account = trading_api.get_account()
+            portfolio_value = float(account.portfolio_value)
+            
+            # Risk management: max 2% of portfolio per trade
+            max_position_value = portfolio_value * 0.02
+            shares = int(max_position_value / signal['price'])
+            
+            if shares < 1:
+                print(f'⚠️ Position too small for {signal["symbol"]} - need at least ${signal["price"]:.2f}')
+                continue
+            
+            # Execute paper trade
+            order = trading_api.submit_order(
+                symbol=signal['symbol'],
+                qty=shares,
+                side='buy',
+                type='market',
+                time_in_force='gtc'
+            )
+            
+            executed_trades.append({
+                'symbol': signal['symbol'],
+                'action': signal['signal_type'],
+                'shares': shares,
+                'price': signal['price'],
+                'confidence': signal['confidence'],
+                'order_id': order.id,
+                'estimated_value': shares * signal['price'],
+                'profit_potential': signal['technical_data'].get('profit_potential', 0),
+                'sentiment_boost': signal['sentiment_data'].get('sentiment_boost', 0),
+                'timestamp': datetime.now().isoformat()
+            })
+            
+            print(f'🎯 PAPER TRADE: Bought {shares} shares of {signal["symbol"]} at ${signal["price"]} (${shares * signal["price"]:.2f})')
+            
+        except Exception as e:
+            print(f'❌ Error executing paper trade for {signal["symbol"]}: {e}')
+            continue
+    
+    return executed_trades
+
+# NEW: Get portfolio summary for enhanced notifications
+def get_portfolio_summary(trading_api):
+    """Get portfolio summary"""
+    if not trading_api:
+        return None
     
     try:
-        # Initialize AWS services
+        account = trading_api.get_account()
+        positions = trading_api.list_positions()
+        
+        return {
+            'total_value': float(account.portfolio_value),
+            'buying_power': float(account.buying_power),
+            'day_pnl': float(account.unrealized_pl) if hasattr(account, 'unrealized_pl') else 0,
+            'cash': float(account.cash),
+            'positions_count': len(positions)
+        }
+    except Exception as e:
+        print(f'Error getting portfolio summary: {e}')
+        return None
+    
+def lambda_handler(event, context):
+    print('🚀 Enhanced Trading Engine Lambda started - ML-POWERED + SENTIMENT + PAPER TRADING MODE')
+    
+    try:
+        # Initialize AWS services (EXISTING)
         dynamodb = boto3.resource('dynamodb')
         sns = boto3.client('sns')
         
-        # Get environment variables
+        # Get environment variables (EXISTING)
         signals_table_name = os.environ.get('SIGNALS_TABLE', 'trading-system-signals')
         sns_topic_arn = os.environ.get('SNS_TOPIC_ARN')
         
         signals_table = dynamodb.Table(signals_table_name)
         
-        # Always scan for opportunities with ML + Sentiment enhancement
-        print('📊 Scanning market with ML + Sentiment enhancement (24/7 mode)')
+        # NEW: Initialize paper trading
+        trading_api = init_alpaca_paper_trading()
         
-        # ENHANCED market scan with ML + Sentiment analysis
+        # Always scan for opportunities with ML + Sentiment enhancement (EXISTING)
+        print('📊 Scanning market with ML + Sentiment + Paper Trading enhancement')
+        
+        # ENHANCED market scan with ML + Sentiment analysis (EXISTING)
         signals = scan_enhanced_market_with_sentiment()
         
         print(f'📊 Found {len(signals)} enhanced trading signals with sentiment')
         
-        # Always store signals (whether market is open or not)
+        # Always store signals (EXISTING FUNCTIONALITY)
         stored_signals = 0
         for signal in signals:
-            # Add market execution flag and ML confidence
+            # Add market execution flag and ML confidence (EXISTING)
             signal['execution_status'] = 'queued' if not is_market_open() else 'ready'
             signal['market_open_at_creation'] = is_market_open()
             signal['ml_enhanced'] = True
             signal['sentiment_enhanced'] = True
             signal['enhancement_version'] = '2.1'
+            # NEW: Add trading info
+            signal['trading_enabled'] = trading_api is not None
             
             if store_signal_in_dynamodb(signals_table, signal):
                 stored_signals += 1
         
-        # Send notifications for high-confidence signals (ML + Sentiment enhanced threshold)
+        # NEW: Execute paper trades if market is open and we have trading API
+        executed_trades = []
+        if trading_api and signals and is_market_open():
+            executed_trades = execute_paper_trades(trading_api, signals)
+        
+        # NEW: Get portfolio status for notifications
+        portfolio_status = get_portfolio_summary(trading_api)
+        
+        # Send notifications for high-confidence signals (EXISTING, BUT ENHANCED)
         high_confidence_signals = [s for s in signals if s.get('confidence', 0) >= 70]
         
         print(f'🎯 High confidence ML + Sentiment signals: {len(high_confidence_signals)}')
         
         notifications_sent = 0
         if high_confidence_signals and sns_topic_arn:
-            if send_enhanced_notifications(sns, sns_topic_arn, high_confidence_signals):
+            # NEW: Enhanced notifications with trading info
+            if send_enhanced_trading_notifications(sns, sns_topic_arn, high_confidence_signals, executed_trades, portfolio_status):
                 notifications_sent = 1
         
-        # Check market status for response
+        # Check market status for response (EXISTING)
         market_status = 'open' if is_market_open() else 'closed'
         execution_mode = 'immediate' if is_market_open() else 'queued'
         
+        # ENHANCED result with trading info
         result = {
             'statusCode': 200,
             'body': json.dumps({
                 'status': 'success',
-                'scanning_mode': 'ml_sentiment_enhanced_always_active',
+                'scanning_mode': 'ml_sentiment_enhanced_always_active_with_trading',
                 'signals_found': len(signals),
                 'signals_stored': stored_signals,
                 'high_confidence_signals': len(high_confidence_signals),
+                'paper_trades_executed': len(executed_trades),
+                'executed_trades': executed_trades,
                 'notifications_sent': notifications_sent,
                 'timestamp': datetime.now().isoformat(),
                 'market_status': market_status,
                 'execution_mode': execution_mode,
+                'trading_mode': 'paper_trading' if trading_api else 'signals_only',
+                'portfolio_value': portfolio_status['total_value'] if portfolio_status else 0,
                 'ml_version': '2.1',
                 'sentiment_enabled': True,
+                'trading_enabled': trading_api is not None,
                 'enhancement_active': True,
-                'message': f'ML + Sentiment Enhanced: Found {len(signals)} signals - {"ready for execution" if is_market_open() else "queued for market open"}'
+                'message': f'ML + Sentiment + Trading Enhanced: Found {len(signals)} signals, executed {len(executed_trades)} trades - {"ready for execution" if is_market_open() else "queued for market open"}'
             })
         }
         
-        print(f'✅ ML + Sentiment Enhanced scan completed - {execution_mode} mode')
+        print(f'✅ ML + Sentiment + Trading Enhanced scan completed - {execution_mode} mode - {len(executed_trades)} trades executed')
         return result
         
     except Exception as e:
@@ -102,7 +232,7 @@ def lambda_handler(event, context):
         }
 
 def is_market_open():
-    """Check if market is open (9 AM - 4 PM EST weekdays) - simplified without pytz"""
+    """Check if market is open (9 AM - 4 PM EST weekdays) - simplified without pytz (EXISTING)"""
     try:
         # Get current UTC time
         now_utc = datetime.utcnow()
@@ -135,7 +265,7 @@ def is_market_open():
         return True
 
 def get_real_stock_data(symbol):
-    """Get REAL stock data from Yahoo Finance API with enhanced data points"""
+    """Get REAL stock data from Yahoo Finance API with enhanced data points (EXISTING)"""
     try:
         # Yahoo Finance API endpoint - get more data for ML
         url = f'https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?interval=1d&range=60d'
@@ -177,7 +307,7 @@ def get_real_stock_data(symbol):
         return None
 
 def get_sentiment_data(symbol):
-    """Get FREE sentiment analysis for the stock"""
+    """Get FREE sentiment analysis for the stock (EXISTING)"""
     import random
     
     try:
@@ -212,7 +342,7 @@ def get_sentiment_data(symbol):
         }
 
 def calculate_enhanced_indicators(prices):
-    """Calculate enhanced technical indicators for ML-powered analysis"""
+    """Calculate enhanced technical indicators for ML-powered analysis (EXISTING)"""
     if len(prices) < 20:
         return {}
     
@@ -273,7 +403,7 @@ def calculate_enhanced_indicators(prices):
     }
 
 def calculate_rsi(prices, period=14):
-    """Enhanced RSI calculation"""
+    """Enhanced RSI calculation (EXISTING)"""
     if len(prices) < period + 1:
         return 50  # Default neutral RSI
     
@@ -298,7 +428,7 @@ def calculate_rsi(prices, period=14):
     return rsi
 
 def ml_enhanced_analysis_with_sentiment(symbol, data, indicators, sentiment_data):
-    """ML-Enhanced signal analysis with SENTIMENT for maximum profitability"""
+    """ML-Enhanced signal analysis with SENTIMENT for maximum profitability (EXISTING)"""
     try:
         if not data or len(data) < 20:
             return None
@@ -512,7 +642,7 @@ def ml_enhanced_analysis_with_sentiment(symbol, data, indicators, sentiment_data
         return None
 
 def scan_enhanced_market_with_sentiment():
-    """Scan market with ML + Sentiment enhancement for maximum profitability"""
+    """Scan market with ML + Sentiment enhancement for maximum profitability (EXISTING)"""
     # Expanded stock universe for more opportunities
     symbols = [
         # Large Cap Tech (highest volume/opportunity)
@@ -564,7 +694,7 @@ def scan_enhanced_market_with_sentiment():
     return signals
 
 def store_signal_in_dynamodb(table, signal):
-    """Store enhanced signal in DynamoDB"""
+    """Store enhanced signal in DynamoDB (EXISTING)"""
     try:
         table.put_item(Item=convert_floats_to_decimal(signal))
         sentiment_boost = signal.get('sentiment_data', {}).get('sentiment_boost', 0)
@@ -574,56 +704,85 @@ def store_signal_in_dynamodb(table, signal):
         print(f'❌ Error storing signal: {e}')
         return False
 
-def send_enhanced_notifications(sns_client, topic_arn, signals):
-    """Send enhanced email notifications for profitable signals with sentiment data"""
+# ENHANCED: Send notifications with trading info
+def send_enhanced_trading_notifications(sns_client, topic_arn, signals, executed_trades, portfolio_status):
+    """Send enhanced email notifications with trading data"""
     try:
-        if not signals:
+        if not signals and not executed_trades:
             return False
         
         market_open = is_market_open()
         execution_status = "READY FOR EXECUTION" if market_open else "QUEUED FOR MARKET OPEN"
         
-        message = f'🤖 ML + SENTIMENT ENHANCED TRADING SIGNALS - {execution_status} 🤖\n\n'
+        message = f'🤖 ML + SENTIMENT + PAPER TRADING SIGNALS - {execution_status} 🤖\n\n'
         message += '💰 MAXIMUM PROFIT OPPORTUNITIES FOR CHARITY! 💰\n\n'
         
+        # NEW: Portfolio status
+        if portfolio_status:
+            message += f'📊 PAPER TRADING PORTFOLIO STATUS:\n'
+            message += f'💰 Total Value: ${portfolio_status["total_value"]:,.2f}\n'
+            message += f'💵 Buying Power: ${portfolio_status["buying_power"]:,.2f}\n'
+            message += f'📈 Day P&L: ${portfolio_status["day_pnl"]:,.2f}\n'
+            message += f'📊 Positions: {portfolio_status["positions_count"]}\n\n'
+        
+        # NEW: Executed trades
+        if executed_trades:
+            message += f'🎯 PAPER TRADES EXECUTED ({len(executed_trades)}):\n'
+            for trade in executed_trades:
+                message += f'• {trade["action"]} {trade["shares"]} shares of {trade["symbol"]}\n'
+                message += f'  💰 Price: ${trade["price"]} | Value: ${trade["estimated_value"]:.2f}\n'
+                message += f'  🎯 Confidence: {trade["confidence"]}%\n'
+                message += f'  📊 Profit Potential: {trade["profit_potential"]:.1f}%\n'
+                message += f'  🧠 Sentiment Boost: +{trade["sentiment_boost"]:.1f}%\n\n'
+        
+        # Existing signals section
         total_profit_potential = 0
         total_sentiment_boost = 0
         
-        for i, signal in enumerate(signals[:3], 1):
-            profit_potential = signal["technical_data"].get("profit_potential", 0)
-            sentiment_boost = signal["sentiment_data"].get("sentiment_boost", 0)
-            sentiment = signal["sentiment_data"].get("overall_sentiment", 0)
-            reddit_mentions = signal["sentiment_data"].get("reddit_mentions", 0)
-            
-            total_profit_potential += profit_potential
-            total_sentiment_boost += sentiment_boost
-            
-            message += f'{i}. {signal["symbol"]} - {signal["signal_type"]}\n'
-            message += f'   💰 Current Price: ${signal["price"]}\n'
-            message += f'   🎯 ML Confidence: {signal["confidence"]}%\n'
-            message += f'   📊 Profit Potential: {profit_potential:.1f}%\n'
-            message += f'   🧠 Sentiment: {sentiment:.2f} (+{sentiment_boost:.1f}% boost)\n'
-            message += f'   📱 Reddit Buzz: {reddit_mentions} mentions\n'
-            message += f'   📈 Key Factor: {signal["reasons"][0]}\n\n'
+        if signals:
+            message += f'📊 HIGH CONFIDENCE SIGNALS ({len(signals)}):\n'
+            for i, signal in enumerate(signals[:3], 1):
+                profit_potential = signal["technical_data"].get("profit_potential", 0)
+                sentiment_boost = signal["sentiment_data"].get("sentiment_boost", 0)
+                sentiment = signal["sentiment_data"].get("overall_sentiment", 0)
+                reddit_mentions = signal["sentiment_data"].get("reddit_mentions", 0)
+                
+                total_profit_potential += profit_potential
+                total_sentiment_boost += sentiment_boost
+                
+                message += f'{i}. {signal["symbol"]} - {signal["signal_type"]}\n'
+                message += f'   💰 Current Price: ${signal["price"]}\n'
+                message += f'   🎯 ML Confidence: {signal["confidence"]}%\n'
+                message += f'   📊 Profit Potential: {profit_potential:.1f}%\n'
+                message += f'   🧠 Sentiment: {sentiment:.2f} (+{sentiment_boost:.1f}% boost)\n'
+                message += f'   📱 Reddit Buzz: {reddit_mentions} mentions\n'
+                message += f'   📈 Key Factor: {signal["reasons"][0]}\n\n'
         
-        message += f'🎯 Combined Profit Potential: {total_profit_potential:.1f}%\n'
-        message += f'🧠 Total Sentiment Boost: +{total_sentiment_boost:.1f}%\n'
+        if signals:
+            message += f'🎯 Combined Profit Potential: {total_profit_potential:.1f}%\n'
+            message += f'🧠 Total Sentiment Boost: +{total_sentiment_boost:.1f}%\n'
+        
         message += f'⏰ Generated: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}\n'
-        message += f'📊 Market Status: {"OPEN - Execute immediately" if market_open else "CLOSED - Signals queued"}\n'
-        message += '🤖 Your ML + Sentiment enhanced system is finding maximum profit opportunities!\n'
+        message += f'📊 Market Status: {"OPEN - Trades executed automatically" if market_open else "CLOSED - Signals queued"}\n'
+        
+        if executed_trades:
+            message += f'🎯 Paper trades executed automatically!\n'
+            message += f'🌐 Check your Alpaca dashboard: https://app.alpaca.markets/dashboard/overview\n'
+        
+        message += '🤖 Your ML + Sentiment + Paper Trading system is working!\n'
         message += '💝 More profits = More help for the kids!'
         
         response = sns_client.publish(
             TopicArn=topic_arn,
             Message=message,
-            Subject=f'🤖 {len(signals)} ML + Sentiment Enhanced Profit Signals - {execution_status}!'
+            Subject=f'🤖 Trading Update: {len(executed_trades)} trades executed, {len(signals)} signals - {execution_status}!'
         )
         
-        print(f'📱 Enhanced notification sent with sentiment data - {execution_status}')
+        print(f'📱 Enhanced trading notification sent with paper trading data - {execution_status}')
         return True
         
     except Exception as e:
         print(f'❌ Error sending enhanced notification: {e}')
         return False
 
-print('🤖 Enhanced Trading Engine - ML + SENTIMENT Powered for Maximum Charity Impact!')
+print('🤖 Enhanced Trading Engine - ML + SENTIMENT + PAPER TRADING Powered for Maximum Charity Impact!')
